@@ -1,0 +1,8 @@
+# never commit keys
+ww3key
+ww3key.pub
+*.key
+*.pem
+# local files not part of the pages site
+server.py
+run_server.cmd
