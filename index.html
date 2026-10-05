@@ -972,10 +972,10 @@ function render() {
   var hqOnt = canTargetHq ? ' onclick="doAttack(' + S.attackSel + ',&quot;hq&quot;)"' : '';
 
   if (MODE === "online" && NET) {
-    if (!S.started) setTurnBar("Waiting for opponent...");
-    else setTurnBar(pName(S.turn) + (S.turn === NET.id ? "  (you)" : "  turn"));
+    if (!S.started) setTurnBar("Waiting for opponent");
+    else setTurnBar(pName(S.turn) + (S.turn === NET.id ? "  (you)" : ""));
   } else {
-    setTurnBar("Player " + (cur + 1) + "'s Turn");
+    setTurnBar("Player " + (cur + 1));
   }
 
   // top = opponent
