@@ -162,7 +162,7 @@
   <div id="fit">
     <div id="stage">
       <header>
-        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v3</span></h1>
+        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v4</span></h1>
         <div id="turnbar">Player 1's Turn</div>
       </header>
 
@@ -382,7 +382,7 @@ function resolveOrder(inst, p) {
 function resolveBattlecry(inst, p) {
   var me = S.players[p], foe = S.players[other(p)];
   if (inst.key === "medic") {
-    me.hq = Math.min(me.hq + 3, 20);
+    me.hq += 3;
     say("Medic heals your HQ for 3.");
   } else if (inst.key === "grenadier") {
     for (var i = 0; i < foe.board.length; i++) {
@@ -999,7 +999,7 @@ function render() {
       '<div class="hqbox"><div class="hqcard' + hqTgtCls + '"' + hqOnt + '>' +
         '<div class="star">★★★★★</div>' +
         '<div class="hpnum">' + en.hq + '</div>' +
-        '<div class="hpbar-wrap"><div class="hpbar' + (en.hq <= 5 ? ' low' : '') + '" style="width:' + Math.max(0, Math.round(en.hq / 20 * 100)) + '%"></div></div>' +
+        '<div class="hpbar-wrap"><div class="hpbar' + (en.hq <= 5 ? ' low' : '') + '" style="width:' + Math.min(100, Math.round(en.hq / 20 * 100)) + '%"></div></div>' +
       '</div></div>' +
       '<div class="stackbox"><div class="stackcard"></div><span></span><span></span></div>' +
     '</div>' +
@@ -1015,7 +1015,7 @@ function render() {
       '<div class="hqbox"><div class="hqcard">' +
         '<div class="star">★★★★★</div>' +
         '<div class="hpnum">' + my.hq + '</div>' +
-        '<div class="hpbar-wrap"><div class="hpbar' + (my.hq <= 5 ? ' low' : '') + '" style="width:' + Math.max(0, Math.round(my.hq / 20 * 100)) + '%"></div></div>' +
+        '<div class="hpbar-wrap"><div class="hpbar' + (my.hq <= 5 ? ' low' : '') + '" style="width:' + Math.min(100, Math.round(my.hq / 20 * 100)) + '%"></div></div>' +
       '</div></div>' +
       '<div class="stackbox"><div class="stackcard"></div><span></span><span></span></div>' +
     '</div>' +
