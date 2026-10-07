@@ -164,13 +164,23 @@
   #modal .box h2 { font-size: 18px; letter-spacing: 3px; margin-bottom: 4px; color: #c9b458; }
   #modal .box p { font-size: 12px; color: #b9c4a8; margin-bottom: 16px; }
   #modal .tip { font-size: 10px; color: #8a917c; margin-top: -10px; margin-bottom: 14px; }
+
+  #roomlist { display: none; position: fixed; top: 0; left: 0; bottom: 0; right: 0; background: rgba(0,0,0,.6); align-items: center; justify-content: center; z-index: 50; }
+  #roomlist.show { display: flex; }
+  #roomlist .rbox { max-height: 72vh; overflow: auto; background: linear-gradient(160deg, #33371f, #1c2012); border: 3px solid #c9b458; border-radius: 12px; padding: 18px 22px; width: 330px; }
+  #roomlist h2 { font-size: 16px; letter-spacing: 3px; color: #c9b458; text-align: center; margin-bottom: 10px; }
+  #roomlist .rrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid #3a4030; font-size: 13px; color: #e6e9d5; }
+  #roomlist .rrow .rrowc { color: #c9b458; letter-spacing: 1px; font-weight: bold; }
+  #roomlist .rrow .btn { padding: 4px 12px; font-size: 11px; }
+  #roomlist .tip { font-size: 11px; color: #8a917c; text-align: center; margin: 12px 0; }
+  #roomlist .btns { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
 </style>
 </head>
 <body>
   <div id="fit">
     <div id="stage">
       <header>
-        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v5</span></h1>
+        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v6</span></h1>
         <div id="turnbar">Player 1's Turn</div>
       </header>
 
@@ -184,6 +194,7 @@
           <input id="roomIn" maxlength="6" placeholder="Room code" onkeydown="if(event.key==='Enter')joinGame();">
           <button class="btn" onclick="hostGame()">HOST</button>
           <button class="btn" onclick="joinGame()">JOIN</button>
+          <button class="btn" onclick="browseRooms()">ROOMS</button>
         </div>
         <div id="lobby">
           <div class="lobbyRow"><span class="lbl">ROOM</span><span id="lobbyRoom"></span></div>
@@ -214,6 +225,18 @@
       <p id="mText"></p>
       <p class="tip" id="mTip"></p>
       <button class="btn" id="mBtn">Continue</button>
+    </div>
+  </div>
+
+<div id="roomlist">
+    <div class="rbox">
+      <h2>OPEN ROOMS</h2>
+      <div id="roomRows"></div>
+      <div id="roomHint" class="tip">No rooms open right now.</div>
+      <div class="btns">
+        <button class="btn" onclick="refreshRooms()">REFRESH</button>
+        <button class="btn" onclick="closeRooms()">CLOSE</button>
+      </div>
     </div>
   </div>
 
@@ -460,6 +483,7 @@ function lobbyRender() {
 
 function startGame() {
   if (!NET || NET.started) return;
+  if (NET.id === 0 && MQ.connected) mqClear("kards6/rooms/" + NET.code);
   NET.started = true;
   hideLobby();
   status("");
@@ -470,6 +494,65 @@ function lobbyStart() {
   if (!NET || NET.id !== 0 || !NET.foeName || NET.started) return;
   mqPublish(mqTarget("lobby"), { t: "start", s: NET.sess, c: NET.code, p0: NET.meName, p1: NET.foeName }, true);
   startGame();
+}
+
+var ROOMS = {};
+var BROWSE = false;
+
+function browseRooms() {
+  BROWSE = true;
+  ROOMS = {};
+  document.getElementById("roomlist").classList.add("show");
+  roomShowHint();
+  mqConnect();
+  mqSubscribe("kards6/rooms/+");
+  if (!MQ.roomT) MQ.roomT = setInterval(roomPrune, 5000);
+}
+
+function refreshRooms() {
+  if (!BROWSE) return;
+  ROOMS = {};
+  roomShowHint();
+  mqSubscribe("kards6/rooms/+");
+}
+
+function closeRooms() {
+  BROWSE = false;
+  document.getElementById("roomlist").classList.remove("show");
+  if (MQ.roomT) { clearInterval(MQ.roomT); MQ.roomT = null; }
+}
+
+function roomPrune() {
+  if (!BROWSE) return;
+  var now = Date.now();
+  Object.keys(ROOMS).forEach(function (c) { if (now - ROOMS[c].ts > 60000) delete ROOMS[c]; });
+  roomShowHint();
+}
+
+function mqRoomMsg(topic, msg) {
+  if (!BROWSE) return;
+  if (!msg || !msg.c || !msg.n) { var c = topic.slice(topic.lastIndexOf("/") + 1); if (ROOMS[c]) { delete ROOMS[c]; roomShowHint(); } return; }
+  ROOMS[msg.c] = { n: msg.n, c: msg.c, ts: (msg.ts || Date.now()) };
+  roomShowHint();
+}
+
+function roomShowHint() {
+  var rows = document.getElementById("roomRows");
+  var hint = document.getElementById("roomHint");
+  var codes = Object.keys(ROOMS).sort();
+  if (!codes.length) { rows.innerHTML = ""; hint.style.display = "block"; return; }
+  hint.style.display = "none";
+  rows.innerHTML = codes.map(function (c) {
+    return '<div class="rrow"><span>' + ROOMS[c].n + '</span><span class="rrowc">' + c + '</span><button class="btn" onclick="joinRoom(\'' + c + '\')">JOIN</button></div>';
+  }).join("");
+}
+
+function joinRoom(code) {
+  closeRooms();
+  document.getElementById("roomIn").value = code;
+  if (MODE !== "online") setMode("online");
+  if (!document.getElementById("onlinePanel")) return;
+  joinGame();
 }
 
 function syncPub(p) {
@@ -624,6 +707,7 @@ function genCode() {
 function genSess() { return Math.random().toString(36).slice(2, 10); }
 
 function hostGame() {
+  if (BROWSE) closeRooms();
   var name = (document.getElementById("nameIn").value || "").trim() || "Player#1";
   NET = { code: genCode(), id: 0, sess: genSess(), ver: 0, meName: name, foeName: "", started: false };
   S = { cur: NET.id, turn: NET.id, over: false, winner: 0, attackSel: null, readyOrder: null, started: false, overShown: false, pub: { hand: [0, 0], deck: [0, 0] } };
@@ -633,6 +717,7 @@ function hostGame() {
 }
 
 function joinGame() {
+  if (BROWSE) closeRooms();
   var name = (document.getElementById("nameIn").value || "").trim() || "Player#2";
   var code = (document.getElementById("roomIn").value || "").trim().toUpperCase();
   if (!code) { status("Enter the room code."); return; }
@@ -688,7 +773,6 @@ function mqSend(type, flags, body) {
 }
 
 function mqConnect() {
-  if (!NET) return;
   if (MQ.ws) { try { MQ.ws.onclose = null; MQ.ws.close(); } catch (e) {} MQ.ws = null; }
   var url = MQ.brokers[MQ.idx % MQ.brokers.length];
   MQ.connected = false;
@@ -743,6 +827,12 @@ function mqPublish(topic, obj, retain) {
   mqSend(3, flags, body);
 }
 
+function mqClear(topic) {
+  var pid = ++MQ.seq;
+  var body = mqCat([mqStr(topic), [(pid >> 8) & 255, pid & 255]]);
+  mqSend(3, 0x03, body);
+}
+
 function mqPing() { mqSend(12, 0, new Uint8Array(0)); }
 
 function mqHandle(ab) {
@@ -772,7 +862,7 @@ function mqHandle(ab) {
     }
     var obj = null;
     try { obj = JSON.parse(mqDec(body.subarray(bp))); } catch (e) {}
-    if (obj) mqOnMessage(topic, obj);
+    mqOnMessage(topic, obj);
   }
 }
 
@@ -789,17 +879,23 @@ function mqReadBody(d) {
 }
 
 function mqReady() {
+  if (BROWSE) mqSubscribe("kards6/rooms/+");
   if (!NET) return;
   mqSubscribe(mqTarget("lobby"));
   mqSubscribe(mqTarget("in" + NET.id));
-  if (NET.id === 0) mqPublish(mqTarget("lobby"), { t: "h", s: NET.sess, c: NET.code, n: NET.meName }, true);
-  else mqPublish(mqTarget("lobby"), { t: "j", s: NET.sess, c: NET.code, n: NET.meName }, true);
+  if (NET.id === 0) {
+    mqPublish(mqTarget("lobby"), { t: "h", s: NET.sess, c: NET.code, n: NET.meName }, true);
+    mqPublish("kards6/rooms/" + NET.code, { n: NET.meName, c: NET.code, ts: Date.now() }, true);
+  } else {
+    mqPublish(mqTarget("lobby"), { t: "j", s: NET.sess, c: NET.code, n: NET.meName }, true);
+  }
   showLobby();
   if (NET.id === 0) status("Waiting for opponent... Room code: " + NET.code);
   else status("Joining room " + NET.code + "...");
 }
 
 function mqOnMessage(topic, msg) {
+  if (topic.indexOf("kards6/rooms/") === 0) { mqRoomMsg(topic, msg); return; }
   if (!NET || !msg) return;
   if (topic === mqTarget("lobby")) {
     if (msg.t === "h" && NET.id === 1) {           // host hello (joiner sees it)
@@ -837,7 +933,9 @@ function mqOnMessage(topic, msg) {
 
 function setMode(m) {
   if (m === MODE) return;
+  if (NET && NET.id === 0 && MQ.connected) mqClear("kards6/rooms/" + NET.code);
   if (NET) { stopPoll(); NET = null; }
+  if (BROWSE) closeRooms();
   hideLobby();
   MODE = m;
   document.getElementById("modeLocal").classList.toggle("active", m === "local");
