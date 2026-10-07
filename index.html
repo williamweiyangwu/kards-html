@@ -130,6 +130,14 @@
   }
   #onlinePanel input:focus { border-color: #c9b458; }
   #onlinePanel .btn { padding: 6px 16px; font-size: 12px; }
+
+  #lobby { display: none; flex-direction: column; align-items: center; gap: 6px; margin-top: 6px; padding: 10px 18px; border: 1px solid #565c3d; border-radius: 8px; background: rgba(0,0,0,.25); min-width: 240px; }
+  #lobby .lobbyRow { display: flex; gap: 10px; width: 100%; justify-content: space-between; font-size: 12px; color: #e6e9d5; }
+  #lobby .lobbyRow .lbl { color: #8a917c; }
+  #lobby .lobbyRow #lobbyRoom { color: #c9b458; font-size: 15px; letter-spacing: 2px; }
+  #lobby #lobbyStart { margin-top: 6px; }
+  #lobby #lobbyStart[disabled] { opacity: .4; }
+  #lobby #lobbyWait { font-size: 11px; color: #b9c4a8; min-height: 14px; }
   #onlineStatus { font-size: 12px; color: #b9c4a8; letter-spacing: 1px; min-height: 16px; }
 
   footer { display: flex; gap: 16px; padding: 10px 0 16px; }
@@ -162,7 +170,7 @@
   <div id="fit">
     <div id="stage">
       <header>
-        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v4</span></h1>
+        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v5</span></h1>
         <div id="turnbar">Player 1's Turn</div>
       </header>
 
@@ -176,6 +184,13 @@
           <input id="roomIn" maxlength="6" placeholder="Room code" onkeydown="if(event.key==='Enter')joinGame();">
           <button class="btn" onclick="hostGame()">HOST</button>
           <button class="btn" onclick="joinGame()">JOIN</button>
+        </div>
+        <div id="lobby">
+          <div class="lobbyRow"><span class="lbl">ROOM</span><span id="lobbyRoom"></span></div>
+          <div class="lobbyRow"><span class="lbl">HOST</span><span id="lobbyHost"></span></div>
+          <div class="lobbyRow"><span class="lbl">PLAYER 2</span><span id="lobbyP2"></span></div>
+          <button class="btn" id="lobbyStart" onclick="lobbyStart()" disabled>START BATTLE</button>
+          <div id="lobbyWait"></div>
         </div>
         <div id="onlineStatus"></div>
       </div>
@@ -417,6 +432,46 @@ function status(txt) {
   if (el) el.textContent = txt || "";
 }
 
+function showLobby() {
+  var el = document.getElementById("lobby");
+  if (!el || MODE !== "online" || !NET) return;
+  el.style.display = "flex";
+  lobbyRender();
+}
+
+function hideLobby() {
+  var el = document.getElementById("lobby");
+  if (el) el.style.display = "none";
+}
+
+function lobbyRender() {
+  if (!NET || MODE !== "online") return;
+  var isHost = NET.id === 0;
+  document.getElementById("lobbyRoom").textContent = NET.code || "";
+  document.getElementById("lobbyHost").textContent = NET.meName + (isHost ? "  (you)" : "");
+  document.getElementById("lobbyP2").textContent = isHost ? (NET.foeName || "—") : NET.foeName + "  (you)";
+  document.getElementById("lobbyWait").textContent = isHost
+    ? (NET.foeName ? "Opponent ready. Press START BATTLE." : "Waiting for an opponent to join...")
+    : "Waiting for the host to start...";
+  var startBtn = document.getElementById("lobbyStart");
+  startBtn.style.display = isHost ? "inline-block" : "none";
+  startBtn.disabled = !isHost || !NET.foeName;
+}
+
+function startGame() {
+  if (!NET || NET.started) return;
+  NET.started = true;
+  hideLobby();
+  status("");
+  onlineInit();
+}
+
+function lobbyStart() {
+  if (!NET || NET.id !== 0 || !NET.foeName || NET.started) return;
+  mqPublish(mqTarget("lobby"), { t: "start", s: NET.sess, c: NET.code, p0: NET.meName, p1: NET.foeName }, true);
+  startGame();
+}
+
 function syncPub(p) {
   S.pub.hand[p] = S.players[p].hand.length;
   S.pub.deck[p] = S.players[p].deck.length;
@@ -488,6 +543,8 @@ function applyPublic(snap) {
 }
 
 function onlineInit() {
+  hideLobby();
+  status("");
   S = { cur: NET.id, turn: NET.id, over: false, winner: 0, attackSel: null, readyOrder: null,
         started: true, overShown: false, pub: { hand: [0, 0], deck: [0, 0] } };
   S.players = [freshPlayer(), freshPlayer()];
@@ -569,7 +626,8 @@ function genSess() { return Math.random().toString(36).slice(2, 10); }
 function hostGame() {
   var name = (document.getElementById("nameIn").value || "").trim() || "Player#1";
   NET = { code: genCode(), id: 0, sess: genSess(), ver: 0, meName: name, foeName: "", started: false };
-  if (S) { S.started = false; S.over = false; }
+  S = { cur: NET.id, turn: NET.id, over: false, winner: 0, attackSel: null, readyOrder: null, started: false, overShown: false, pub: { hand: [0, 0], deck: [0, 0] } };
+  S.players = [freshPlayer(), freshPlayer()];
   status("Connecting to relay...");
   mqConnect();
 }
@@ -579,7 +637,8 @@ function joinGame() {
   var code = (document.getElementById("roomIn").value || "").trim().toUpperCase();
   if (!code) { status("Enter the room code."); return; }
   NET = { code: code, id: 1, sess: genSess(), ver: 0, meName: name, foeName: "", started: false };
-  if (S) { S.started = false; S.over = false; }
+  S = { cur: NET.id, turn: NET.id, over: false, winner: 0, attackSel: null, readyOrder: null, started: false, overShown: false, pub: { hand: [0, 0], deck: [0, 0] } };
+  S.players = [freshPlayer(), freshPlayer()];
   status("Connecting to relay...");
   mqConnect();
 }
@@ -735,6 +794,7 @@ function mqReady() {
   mqSubscribe(mqTarget("in" + NET.id));
   if (NET.id === 0) mqPublish(mqTarget("lobby"), { t: "h", s: NET.sess, c: NET.code, n: NET.meName }, true);
   else mqPublish(mqTarget("lobby"), { t: "j", s: NET.sess, c: NET.code, n: NET.meName }, true);
+  showLobby();
   if (NET.id === 0) status("Waiting for opponent... Room code: " + NET.code);
   else status("Joining room " + NET.code + "...");
 }
@@ -747,27 +807,21 @@ function mqOnMessage(topic, msg) {
         NET.sess = msg.s;                            // adopt the host's session
         mqPublish(mqTarget("lobby"), { t: "j", s: NET.sess, c: NET.code, n: NET.meName }, true);
       }
-      if (msg.c === NET.code && !NET.started) { NET.foeName = msg.n; }
-    } else if (msg.t === "j" && NET.id === 0) {    // join hello (host sees it)
-      if (msg.c === NET.code && msg.s === NET.sess) {
+      if (msg.c === NET.code && !NET.started) {
         NET.foeName = msg.n;
-        if (!NET.started) {
-          NET.started = true;
-          status("");
-          onlineInit();
-        }
-        mqPublish(mqTarget("lobby"), { t: "start", s: NET.sess, c: NET.code, p0: NET.meName, p1: NET.foeName }, true);
+        status("Room found. Waiting for the host to start...");
+        lobbyRender();
+      }
+    } else if (msg.t === "j" && NET.id === 0) {    // join hello (host sees it)
+      if (msg.c === NET.code && msg.s === NET.sess && !NET.started) {
+        NET.foeName = msg.n;
+        status("Opponent joined: " + msg.n);
+        lobbyRender();
       }
     } else if (msg.t === "start") {
       if (msg.c === NET.code && msg.s === NET.sess) {
         NET.foeName = (NET.id === 0) ? msg.p1 : msg.p0;
-        if (!NET.started) {
-          NET.started = true;
-          status("");
-          onlineInit();
-        } else {
-          status("");
-        }
+        startGame();
       }
     }
     return;
@@ -784,6 +838,7 @@ function mqOnMessage(topic, msg) {
 function setMode(m) {
   if (m === MODE) return;
   if (NET) { stopPoll(); NET = null; }
+  hideLobby();
   MODE = m;
   document.getElementById("modeLocal").classList.toggle("active", m === "local");
   document.getElementById("modeOnline").classList.toggle("active", m === "online");
