@@ -123,6 +123,17 @@
   .card.hasskill .art { top: 22px; height: 32px; font-size: 22px; }
   .card.hasskill .utext { top: 58px; bottom: 18px; font-size: 7px; line-height: 1.15; }
 
+  #orderbox {
+    position: fixed; left: 18px; top: 50%; z-index: 45;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    pointer-events: none; opacity: 0;
+    transform: translateY(-50%) translateX(-140%);
+    transition: transform .25s ease, opacity .25s ease;
+  }
+  #orderbox.show { opacity: 1; transform: translateY(-50%) translateX(0); }
+  #orderbox .olabel { font-size: 10px; letter-spacing: 3px; color: #c9b458; text-shadow: 1px 1px 0 #000; }
+  #orderboxCard .card { border-color: #ffd95e; box-shadow: 0 0 18px 4px rgba(255,217,94,.45); }
+
   .cardback { width: 70px; height: 96px; border: 3px solid #6f6040; border-radius: 8px; background: repeating-linear-gradient(45deg, #2c2a1c, #2c2a1c 7px, #3c3a26 7px, #3c3a26 14px); position: relative; }
   .cardback::after { content: "★"; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #c9b458; font-size: 18px; }
 
@@ -263,6 +274,7 @@
   .srow .sl { color: #8a917c; }
   .srow .sv { color: #ffd95e; font-weight: bold; }
   .shead { font-size: 12px; letter-spacing: 2px; color: #c9b458; margin: 12px 0 6px; }
+  .snote { font-size: 10px; line-height: 1.45; color: #8a917c; margin-top: 12px; text-align: center; }
 
   /* effects */
   #fit.shake { animation: k6shake .25s; }
@@ -283,7 +295,7 @@
   <div id="fit">
     <div id="stage">
       <header>
-        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v22</span></h1>
+        <h1>KARDS LITE<span style="font-size:9px;color:#7d865f;vertical-align:top;margin-left:6px;">v23</span></h1>
         <div id="turnbar">Player 1's Turn</div>
       </header>
 
@@ -328,6 +340,10 @@
         <button class="btn" id="endBtn">END TURN</button>
         <button class="btn" id="newBtn">NEW GAME</button>
       </footer>
+    </div>
+    <div id="orderbox">
+      <div class="olabel">ORDER PLAYED</div>
+      <div id="orderboxCard"></div>
     </div>
   </div>
 
@@ -397,6 +413,12 @@
       <div class="tclose" onclick="closeStats()">✕</div>
       <h2>STATISTICS</h2>
       <div id="statsRows"></div>
+      <div class="snote">Progress is stored in this browser only. Clearing browser data erases it \u2014 export a backup regularly.</div>
+      <div class="dbtns" style="margin-top:10px;">
+        <button class="btn" onclick="exportProfile()">EXPORT SAVE</button>
+        <button class="btn" onclick="importProfile()">IMPORT SAVE</button>
+      </div>
+      <input id="importFile" type="file" accept=".json,application/json" style="display:none" onchange="importProfileFile(this)">
       <div class="dbtns"><button class="btn" onclick="closeStats()">CLOSE</button></div>
     </div>
   </div>
@@ -544,6 +566,9 @@ function migrateProfile() {
 function loadProfile() {
   var p = null;
   try { var raw = localStorage.getItem("k6_profile_v1"); if (raw) p = JSON.parse(raw); } catch (e) {}
+  if (!p || typeof p !== "object") {
+    try { var bk = localStorage.getItem("k6_profile_backup_v1"); if (bk) p = JSON.parse(bk); } catch (e) {}
+  }
   if (!p || typeof p !== "object") p = migrateProfile();
   p.decks = p.decks || {};
   p.stats = p.stats || {};
@@ -555,7 +580,11 @@ function loadProfile() {
 }
 
 function saveProfile() {
-  try { localStorage.setItem("k6_profile_v1", JSON.stringify(PROFILE)); } catch (e) {}
+  try {
+    var raw = JSON.stringify(PROFILE);
+    localStorage.setItem("k6_profile_v1", raw);
+    localStorage.setItem("k6_profile_backup_v1", raw);
+  } catch (e) {}
 }
 
 PROFILE = loadProfile();
@@ -734,6 +763,7 @@ function drawStarting(p) {
 
 function newGame(f0, f1) {
   AI_TICK++;
+  cancelOrderFx();
   var fa = f0 || FACTION, fb = f1 || FACTION2;
   if (MODE === "ai") fb = aiFaction();
   FACTION = fa; FACTION2 = fb; saveFaction();
@@ -767,7 +797,7 @@ function beginTurn(p) {
 }
 
 function endTurn() {
-  if (S.over) return;
+  if (S.over || ORDER_BUSY) return;
   if (MODE === "online") { onlineEndTurn(); return; }
   if (MODE === "ai") { aiEndTurn(); return; }
   S.readyOrder = null;
@@ -804,12 +834,7 @@ function play(hidx) {
   pl.res -= inst.cost;
   pl.hand.splice(hidx, 1);
   if (inst.type === "order") {
-    sfx("order");
-    resolveOrder(inst, S.cur);
-    syncPub(S.cur);
-    render();
-    if (MODE === "online") publish();
-    if (checkVictory()) return;
+    runOrderFx(inst, S.cur, function () { resolveOrder(inst, S.cur); });
     return;
   }
   pl.board.push(inst);
@@ -836,14 +861,12 @@ function resolveOrderTarget(tidx) {
   var n = (fxOf(inst.key) || {}).n || 1;
   pl.res -= inst.cost;
   pl.hand.splice(S.readyOrder.hidx, 1);
-  def.hp -= n;
-  say(inst.name + " hits " + def.name + " for " + n + "!");
-  cleanBoard(foe);
   S.readyOrder = null;
-  syncPub(S.cur);
-  render();
-  if (MODE === "online") publish();
-  if (checkVictory()) return;
+  runOrderFx(inst, S.cur, function () {
+    def.hp -= n;
+    say(inst.name + " hits " + def.name + " for " + n + "!");
+    cleanBoard(foe);
+  });
 }
 
 function resolveOrder(inst, p) {
@@ -878,6 +901,76 @@ function resolveOrder(inst, p) {
       say(inst.name + ": the enemy HQ takes " + n + "!");
     }
   }
+}
+
+// ---------------- Order display ----------------
+var ORDER_HOLD_MS = 2000;
+var ORDER_BUSY = false;
+var ORDER_TIMER = null;
+var ORDER_REMOTE_TIMER = null;
+var ORDER_PUB = null;
+
+function orderBoxCardHTML(inst) {
+  var d = DEFS[inst.key] || {};
+  return '<div class="card order">' +
+    '<div class="cost">' + (inst.cost != null ? inst.cost : (d.cost || 0)) + '</div>' +
+    '<div class="cname">' + (inst.name || d.name || "") + '</div>' +
+    '<div class="art">' + (d.art || "\u25c6") + '</div>' +
+    '<div class="otext">' + (d.text || "") + '</div>' +
+    '</div>';
+}
+
+function showOrderCard(inst) {
+  var box = document.getElementById("orderbox");
+  var card = document.getElementById("orderboxCard");
+  if (!box || !card) return;
+  card.innerHTML = orderBoxCardHTML(inst);
+  box.classList.add("show");
+}
+
+function hideOrderCard() {
+  var box = document.getElementById("orderbox");
+  if (box) box.classList.remove("show");
+}
+
+function cancelOrderFx() {
+  if (ORDER_TIMER) { clearTimeout(ORDER_TIMER); ORDER_TIMER = null; }
+  if (ORDER_REMOTE_TIMER) { clearTimeout(ORDER_REMOTE_TIMER); ORDER_REMOTE_TIMER = null; }
+  ORDER_BUSY = false;
+  ORDER_PUB = null;
+  hideOrderCard();
+}
+
+function runOrderFx(inst, p, apply) {
+  cancelOrderFx();
+  ORDER_BUSY = true;
+  ORDER_PUB = { key: inst.key, p: p };
+  showOrderCard(inst);
+  sfx("order");
+  render();
+  if (MODE === "online") publish();
+  ORDER_TIMER = setTimeout(function () {
+    ORDER_TIMER = null;
+    ORDER_BUSY = false;
+    apply();
+    ORDER_PUB = null;
+    hideOrderCard();
+    syncPub(p);
+    render();
+    if (MODE === "online") publish();
+    checkVictory();
+  }, ORDER_HOLD_MS);
+}
+
+function remoteOrderCard(snap) {
+  if (!snap || !snap.order || !snap.order.key || ORDER_BUSY) return;
+  var d = DEFS[snap.order.key] || {};
+  showOrderCard({ key: snap.order.key, cost: d.cost || 0, name: d.name || "" });
+  if (ORDER_REMOTE_TIMER) clearTimeout(ORDER_REMOTE_TIMER);
+  ORDER_REMOTE_TIMER = setTimeout(function () {
+    ORDER_REMOTE_TIMER = null;
+    if (!ORDER_BUSY) hideOrderCard();
+  }, ORDER_HOLD_MS);
 }
 
 function resolveBattlecry(inst, p) {
@@ -959,6 +1052,7 @@ function aiEndTurn() {
 
 function aiStep(t) {
   if (t !== AI_TICK || MODE !== "ai" || S.over) return;
+  if (ORDER_BUSY) { setTimeout(function () { aiStep(t); }, 250); return; }
   var ai = S.players[1];
   if (aiPlayOne(ai)) { if (checkVictory()) return; render(); setTimeout(function () { aiStep(t); }, AI_DELAY); return; }
   if (aiAttackOne(ai)) { if (checkVictory()) return; render(); setTimeout(function () { aiStep(t); }, AI_DELAY); return; }
@@ -1022,20 +1116,20 @@ function aiPlayOne(ai) {
     var o = ai.hand[oi];
     ai.res -= o.cost;
     ai.hand.splice(oi, 1);
-    sfx("order");
     if (orderNeedsTarget(o.key)) {
       var foes = S.players[0].board;
       var t = aiPickTarget(foes);
       if (t) {
         var dmg = (fxOf(o.key) || {}).n || 1;
-        t.hp -= dmg;
-        say(o.name + " hits " + t.name + " for " + dmg + "!");
-        cleanBoard(S.players[0]);
+        runOrderFx(o, 1, function () {
+          t.hp -= dmg;
+          say(o.name + " hits " + t.name + " for " + dmg + "!");
+          cleanBoard(S.players[0]);
+        });
       }
     } else {
-      resolveOrder(o, 1);
+      runOrderFx(o, 1, function () { resolveOrder(o, 1); });
     }
-    syncPub(1);
     return true;
   }
   return false;
@@ -1258,6 +1352,7 @@ function buildPublic() {
     deck: S.pub.deck.slice(),
     board: [boardArr(S.players[0]), boardArr(S.players[1])],
     faction: [S.players[0].faction, S.players[1].faction],
+    order: ORDER_PUB ? { key: ORDER_PUB.key, p: ORDER_PUB.p } : null,
     msg: LAST_MSG
   };
 }
@@ -1291,6 +1386,7 @@ function applyPublic(snap) {
   recomputeAura(S.players[0]);
   recomputeAura(S.players[1]);
   if (snap.msg) log(flipPOV(snap.msg));
+  remoteOrderCard(snap);
   render();
   if (!S.over && snap.turn === NET.id) {
     onlineBeginMyTurn();
@@ -1304,6 +1400,7 @@ function applyPublic(snap) {
 }
 
 function onlineInit() {
+  cancelOrderFx();
   hideLobby();
   status("");
   S = { cur: NET.id, turn: NET.id, over: false, winner: 0, attackSel: null, readyOrder: null,
@@ -1344,6 +1441,7 @@ function onlineEndTurn() {
 
 function resetOnline() {
   if (MODE !== "online" || !NET) return;
+  cancelOrderFx();
   S.overShown = false;
   NET.ver++;
   var snap = buildPublic();
@@ -1383,7 +1481,7 @@ function myTurn() {
   return true;
 }
 
-function canAct() { return myTurn(); }
+function canAct() { return !ORDER_BUSY && myTurn(); }
 
 function genCode() {
   var letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -1636,6 +1734,7 @@ function onlineWatchdog() {
 
 function setMode(m) {
   if (m === MODE) return;
+  cancelOrderFx();
   if (NET && NET.id === 0 && MQ.connected) mqClear("kards6/rooms/" + NET.code);
   if (NET) { stopPoll(); NET = null; }
   if (BROWSE) closeRooms();
@@ -1905,7 +2004,7 @@ function render() {
 
   var eBtn = document.getElementById("endBtn");
   var offlineWait = (MODE === "online") ? (!canAct() || !S.started) : (MODE === "ai" ? (S.cur !== 0) : false);
-  eBtn.disabled = S.over || offlineWait;
+  eBtn.disabled = S.over || offlineWait || ORDER_BUSY;
   if (MODE === "online" && !canAct() && S.started) eBtn.textContent = "WAIT...";
   else if (MODE === "ai" && S.cur !== 0) eBtn.textContent = "COMPUTER...";
   else eBtn.textContent = "END TURN";
@@ -1933,9 +2032,9 @@ var TUT_STEPS = [
   { t: "3. NATIONS", h: "<p>There are <b>5 nations</b>, each with its own <b>exclusive deck</b> of cards based on its real WW2 weapons. There are <b>no national buffs</b> \u2014 a nation is defined purely by its cards. Pick yours with the <b>NATION</b> button.</p><ul><li><b>USA</b> \u2605 \u2014 industrial might: Shermans, P-51s, B-17s, Marines.</li><li><b>UK</b> \u265b \u2014 Commonwealth: Spitfires, Commandos, radar, steady Guards.</li><li><b>GERMANY</b> \u2720 \u2014 Blitzkrieg: fast Panzers, Stukas, heavy Tigers.</li><li><b>USSR</b> \u262d \u2014 endless numbers: T-34s, Katyusha rockets, human waves.</li><li><b>JAPAN</b> \u2600 \u2014 aggressive air: cheap Zeros, banzai, kamikaze.</li></ul>" },
   { t: "4. UNITS", h: "<p>Units fill your front row (max 4). Blue circle = cost, red = attack, green = HP. Hover a card to read its power. Each nation's units are different \u2014 here are the shared <b>keywords</b>:</p><ul><li><b>Haste</b> \u2014 can attack the turn it is played.</li><li><b>Guard</b> \u2014 enemies must fight it first; it shields your HQ.</li><li><b>Air</b> \u2014 ignores Guard and can always strike the HQ.</li><li><b>Battlecries</b> \u2014 many units have an effect on play: healing your HQ, damaging the enemy HQ or their units, drawing cards, or giving your other units +1 attack.</li></ul>" },
   { t: "5. ATTACKING", h: "<ul><li>Click your unit, then click an enemy unit or the enemy HQ.</li><li>Each unit attacks <b>once per turn</b>. When two units fight, <b>both</b> deal their attack to each other.</li><li><b>Guard</b> units must be fought first \u2014 they shield the enemy HQ.</li><li><b>Air</b> units ignore Guard and can always hit the HQ.</li><li>A unit normally can't attack the turn it's played \u2014 unless it has <b>Haste</b>.</li></ul>" },
-  { t: "6. ORDERS", h: "<p>Orders are one-shot cards \u2014 they resolve, then vanish. Each nation has its own orders. The shared effects are:</p><ul><li><b>Damage a unit</b> \u2014 click the order, then pick an enemy unit.</li><li><b>Damage the enemy HQ</b> \u2014 a direct strike.</li><li><b>Damage all enemy units</b> \u2014 a sweeping barrage (hits the HQ if their board is empty).</li><li><b>Heal your HQ</b> \u2014 recover hit points.</li><li><b>Draw cards</b> \u2014 refill your hand.</li><li><b>Gain resource</b> \u2014 bank energy for bigger plays.</li><li><b>Rally</b> \u2014 all your units can attack again.</li></ul>" },
+  { t: "6. ORDERS", h: "<p>Orders are one-shot cards \u2014 they resolve, then vanish. A played order is shown in the box on the left for <b>2 seconds</b> before its effect takes place. Each nation has its own orders. The shared effects are:</p><ul><li><b>Damage a unit</b> \u2014 click the order, then pick an enemy unit.</li><li><b>Damage the enemy HQ</b> \u2014 a direct strike.</li><li><b>Damage all enemy units</b> \u2014 a sweeping barrage (hits the HQ if their board is empty).</li><li><b>Heal your HQ</b> \u2014 recover hit points.</li><li><b>Draw cards</b> \u2014 refill your hand.</li><li><b>Gain resource</b> \u2014 bank energy for bigger plays.</li><li><b>Rally</b> \u2014 all your units can attack again.</li></ul>" },
   { t: "7. DECK BUILDER", h: "<ul><li>Open <b>DECK</b> to customize your cards with the <b>+</b> and <b>-</b> buttons \u2014 each row shows a card's <b>cost</b> (and <b>attack/HP</b> for units).</li><li>Each nation keeps its <b>own saved deck</b>. In LOCAL, use the <b>PLAYER 1 / PLAYER 2</b> toggle to build a deck for either player.</li><li>A deck must have <b>exactly 40 cards</b>, with at most <b>3 copies</b> of any card.</li><li><b>USE DEFAULT</b> restores the standard 40-card deck, <b>SAVE</b> keeps your changes, <b>CLOSE</b> cancels.</li></ul>" },
-  { t: "8. PLAY & MENU", h: "<ul><li><b>LOCAL</b> \u2014 two players share one screen (hot-seat); choose <b>both</b> players' nations.</li><li><b>VS AI</b> \u2014 battle the computer; use <b>AI: EASY/NORMAL/HARD</b> to set its skill.</li><li><b>ONLINE</b> \u2014 HOST gives you a room code to share, or press <b>ROOMS</b> to join a waiting game.</li><li><b>NATION</b> \u2014 choose your nation. <b>DECK</b> \u2014 build your deck.</li><li><b>STATS</b> \u2014 track wins, losses and records.</li><li><b>TUTORIAL</b> reopens this guide, <b>SOUND</b> toggles audio.</li></ul><p>Good luck, Commander!</p>" }
+  { t: "8. PLAY & MENU", h: "<ul><li><b>LOCAL</b> \u2014 two players share one screen (hot-seat); choose <b>both</b> players' nations.</li><li><b>VS AI</b> \u2014 battle the computer; use <b>AI: EASY/NORMAL/HARD</b> to set its skill.</li><li><b>ONLINE</b> \u2014 HOST gives you a room code to share, or press <b>ROOMS</b> to join a waiting game.</li><li><b>NATION</b> \u2014 choose your nation. <b>DECK</b> \u2014 build your deck.</li><li><b>STATS</b> \u2014 track wins, losses and records. Use <b>EXPORT SAVE</b> to back up your progress before clearing browser data.</li><li><b>TUTORIAL</b> reopens this guide, <b>SOUND</b> toggles audio.</li></ul><p>Good luck, Commander!</p>" }
 ];
 var TUT_PAGE = 0;
 
@@ -2154,8 +2253,55 @@ function renderStats() {
   document.getElementById("statsRows").innerHTML = html;
 }
 
+function exportProfile() {
+  try {
+    var data = JSON.stringify(PROFILE, null, 2);
+    var blob = new Blob([data], { type: "application/json" });
+    var a = document.createElement("a");
+    var url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = "kards-lite-save-" + new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  } catch (e) {
+    alert("Could not export the save file.");
+  }
+}
+
+function importProfile() {
+  var f = document.getElementById("importFile");
+  if (f) f.click();
+}
+
+function importProfileFile(input) {
+  var file = input.files && input.files[0];
+  if (!file) return;
+  var r = new FileReader();
+  r.onload = function () {
+    try {
+      var p = JSON.parse(r.result);
+      if (!p || typeof p !== "object" || Array.isArray(p)) throw new Error("bad save");
+      PROFILE = p;
+      saveProfile();
+      location.reload();
+    } catch (e) {
+      alert("That file is not a valid KARDS Lite save.");
+      input.value = "";
+    }
+  };
+  r.readAsText(file);
+}
+
 (function () { var b = document.getElementById("soundBtn"); if (b) b.textContent = "SOUND " + (SFX ? "ON" : "OFF"); })();
 updateAILevelBtn();
+try {
+  if (navigator.storage && navigator.storage.persist) {
+    var persistReq = navigator.storage.persist();
+    if (persistReq && persistReq.catch) persistReq.catch(function () {});
+  }
+} catch (e) {}
 
 newGame();
 maybeShowTutorial();
